@@ -1,65 +1,55 @@
-// utils.js - shared helpers for auto-approver scripts
-
+// utils.js
 import fs from "fs";
 import path from "path";
 
-/** ensure a folder exists */
-export function ensureDir(dir) {
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
+/** Ensure directory exists (creates recursively) */
+export function ensureDir(dirPath) {
+  try {
+    if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath, { recursive: true });
+  } catch (e) {
+    console.warn("ensureDir failed:", e.message);
   }
 }
 
-/** timestamp "YYYY-MM-DD HH-mm-ss" */
+/** Timestamp string usable in filenames */
 export function ts() {
   const d = new Date();
-  const pad = (x) => String(x).padStart(2, "0");
-  return (
-    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
-    `${pad(d.getHours())}-${pad(d.getMinutes())}-${pad(d.getSeconds())}`
-  );
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_` +
+         `${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
 }
 
-/** sleep for ms */
+/** Read CSV of requests (one ID per line, header allowed) */
+export function readRequests(csvPath) {
+  const txt = fs.readFileSync(csvPath, { encoding: "utf8" });
+  const lines = txt.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+
+  // If first line looks like a header, drop it
+  if (lines.length > 1 && /[A-Za-z]/.test(lines[0]) && !/^\d/.test(lines[0])) {
+    lines.shift();
+  }
+  return lines;
+}
+
+/** Append a single CSV line to a log file */
+export function appendLog(filePath, text) {
+  fs.appendFileSync(filePath, text, { encoding: "utf8" });
+}
+
+/** Sleep helper (ms) */
 export function sleep(ms) {
-  return new Promise((res) => setTimeout(res, ms));
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** read request IDs from CSV file */
-export function readRequests(csvFile) {
+/** Save a text file to an errors/logs directory (for dumps) */
+export function saveText(name, text, dir = "logs/errors") {
   try {
-    const raw = fs.readFileSync(csvFile, "utf8");
-    return raw
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter((x) => x.length > 0);
-  } catch (e) {
-    console.error("Failed to read CSV:", e.message);
-    return [];
-  }
-}
-
-/** append a line to a log file */
-export function appendLog(file, line) {
-  try {
-    fs.appendFileSync(file, line);
-  } catch (e) {
-    console.error("appendLog error:", e.message);
-  }
-}
-
-/** save a text file inside logs/errors */
-export function saveText(filename, content) {
-  try {
-    const dir = path.resolve("logs", "errors");
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-
-    const file = path.join(dir, filename);
-    fs.writeFileSync(file, content, "utf8");
-    console.log("Saved:", file);
-    return file;
+    const p = path.join(dir, name);
+    fs.writeFileSync(p, text, "utf8");
+    return p;
   } catch (e) {
-    console.error("saveText error:", e.message);
+    console.warn("saveText failed:", e.message);
     return null;
   }
 }
