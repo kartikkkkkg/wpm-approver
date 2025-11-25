@@ -1,10 +1,8 @@
 /**
- * approve_single.js – per-row blue ✔ Approve button, single approver only
+ * approve.js – per-row blue ✔ Approve button (single approver)
  *
  * Usage:
- *   node approve_single.js requests.csv
- *
- * Uses the same helpers & switchUser as your working approve.js
+ *   node approve.js requests.csv
  */
 
 import fs from "fs";
@@ -29,6 +27,8 @@ function userDataDir() {
   return `C:\\Users\\${cfg.edgeProfileUser}\\AppData\\Local\\Microsoft\\Edge\\User Data`;
 }
 
+/* ───────── browser startup ───────── */
+
 async function startBrowser() {
   const profile = userDataDir();
   try {
@@ -47,7 +47,7 @@ async function startBrowser() {
 }
 
 async function gotoHome(page) {
-  await page.goto(cfg.urls.homeNoelle, { waitUntil: "domcontentloaded" });
+  await page.goto(cfg.urls.home, { waitUntil: "domcontentloaded" });
   await page.waitForLoadState("networkidle").catch(() => {});
 }
 
@@ -77,7 +77,7 @@ async function clickIf(page, selector) {
   return false;
 }
 
-/* ───────────────── switch user (re-use your working logic) ───────────────── */
+/* ───────── switch user (generic approver) ───────── */
 
 async function switchUser(page, who) {
   console.log(`→ switchUser: "${who}"`);
@@ -159,7 +159,7 @@ async function switchUser(page, who) {
   throw new Error(`switchUser: unable to select "${who}". Screenshot: ${shot}`);
 }
 
-/* ───────────────── search helpers ───────────────── */
+/* ───────── search helpers ───────── */
 
 async function findSearchInput(page, timeout = 15000) {
   const placeholders = [
@@ -183,7 +183,7 @@ async function findSearchInput(page, timeout = 15000) {
       } catch (e) {}
     }
 
-    // fallback: react-select container like in your screenshots
+    // fallback: react-select container style
     try {
       const container = page
         .locator('div[id^="Search-"], div.react-select, div.search-container')
@@ -232,7 +232,7 @@ async function waitForResult(page, id, maxMs = 40000) {
   return false;
 }
 
-/* ───────────────── click blue ✔ Approve button ───────────────── */
+/* ───────── click blue ✔ Approve button ───────── */
 
 async function clickApproveButton(page) {
   const candidates = [
@@ -252,7 +252,7 @@ async function clickApproveButton(page) {
     } catch (e) {}
   }
 
-  // last-resort JS fallback
+  // last-resort: JS from span[title=Approve] to nearest button
   try {
     const handle = await page.$('span[title="Approve"]');
     if (handle) {
@@ -273,7 +273,7 @@ async function clickApproveButton(page) {
   return false;
 }
 
-/* ───────────────── approve one ID ───────────────── */
+/* ───────── approve one ID ───────── */
 
 async function approveOneInUser(page, id) {
   console.log(`  → Searching for ${id} ...`);
@@ -301,10 +301,10 @@ async function approveOneInUser(page, id) {
   return true;
 }
 
-/* ───────────────── run through all IDs for this single approver ───────────────── */
+/* ───────── loop through all IDs ───────── */
 
-async function approveAllForApprover(page, ids, approverLabel, logPath) {
-  console.log(`\n===== Approving as ${approverLabel} =====`);
+async function approveInUser(page, ids, userLabel, logPath, notePrefix) {
+  console.log(`\n===== Approving as ${userLabel} =====`);
   const remaining = [];
 
   for (const id of ids) {
@@ -313,7 +313,7 @@ async function approveAllForApprover(page, ids, approverLabel, logPath) {
       if (ok) {
         appendLog(
           logPath,
-          `${ts()},${id},approved_in_primary,approved in ${approverLabel}\n`
+          `${ts()},${id},approved_in_${notePrefix},approved in ${userLabel}\n`
         );
       } else {
         remaining.push(id);
@@ -325,14 +325,12 @@ async function approveAllForApprover(page, ids, approverLabel, logPath) {
   }
 
   console.log(
-    `Finished for ${approverLabel}. Approved: ${
-      ids.length - remaining.length
-    }, Remaining (not found / failed): ${remaining.length}`
+    `Finished for ${userLabel}. Approved: ${ids.length - remaining.length}, Remaining: ${remaining.length}`
   );
   return remaining;
 }
 
-/* ───────────────── MAIN ───────────────── */
+/* ───────── MAIN ───────── */
 
 async function main() {
   const csv = process.argv[2] || "requests.csv";
@@ -355,23 +353,24 @@ async function main() {
   try {
     await gotoHome(page);
 
-    const approverName = cfg.users.noelle; // use this as "primary approver"
+    // make sure we are in the desired approver view
     const body = await page.textContent("body").catch(() => "");
-    if (!body.includes(approverName)) {
-      await switchUser(page, approverName);
+    if (!body.includes(cfg.users.approver)) {
+      await switchUser(page, cfg.users.approver);
     }
 
-    const remaining = await approveAllForApprover(
+    const remaining = await approveInUser(
       page,
       ids,
-      approverName,
-      logPath
+      cfg.users.approver,
+      logPath,
+      "approver"
     );
 
     for (const id of remaining) {
       appendLog(
         logPath,
-        `${ts()},${id},not_found_here,not found for ${approverName}\n`
+        `${ts()},${id},not_found_in_approver,not found for ${cfg.users.approver}\n`
       );
     }
 
