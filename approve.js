@@ -1,93 +1,391 @@
-// approve.js
+/**
+ * approve_single.js – per-row blue ✔ Approve button, single approver only
+ *
+ * Usage:
+ *   node approve_single.js requests.csv
+ *
+ * Uses the same helpers & switchUser as your working approve.js
+ */
+
 import fs from "fs";
 import path from "path";
+import { chromium } from "playwright";
 import { cfg } from "./config.js";
 import {
-  sleep,
-  readIdsFromFile,
   ensureDir,
   ts,
-  safeScreenshot,
-  saveText,
-  startBrowser,
-  switchUser,
+  readRequests,
+  appendLog,
+  sleep,
+  saveText
 } from "./utils.js";
 
-async function approveOne(page, id) {
-  const numeric = id.replace("WF-", "");
+const LOGS_DIR = path.resolve("logs");
+const ERR_DIR = path.join(LOGS_DIR, "errors");
+ensureDir(LOGS_DIR);
+ensureDir(ERR_DIR);
 
-  console.log(`\n→ Processing ${id}`);
-
-  // search
-  const input = page.locator(cfg.sel.searchInput).first();
-  await input.waitFor({ timeout: 8000 });
-  await input.fill("");
-  await sleep(200);
-  await input.type(numeric, { delay: 40 });
-
-  console.log("   waiting for WF row...");
-
-  let found = false;
-  const end = Date.now() + cfg.timing.searchTimeoutMs;
-
-  while (Date.now() < end) {
-    if (await page.locator(cfg.sel.rowById(id)).count()) {
-      found = true;
-      break;
-    }
-    await sleep(cfg.timing.searchPollMs);
-  }
-
-  if (!found) {
-    console.log(`   ❌ NOT FOUND`);
-    return "not_found";
-  }
-
-  console.log("   found. clicking approve...");
-
-  const approveBtn = page.locator(cfg.sel.inlineApproveBtn).first();
-  if (!(await approveBtn.count())) {
-    console.log("   ❌ no approve button");
-    return "no_button";
-  }
-
-  await approveBtn.click({ force: true });
-  await sleep(cfg.timing.afterApproveWaitMs);
-
-  console.log(`   ✔ approved ${id}`);
-  return "approved";
+function userDataDir() {
+  return `C:\\Users\\${cfg.edgeProfileUser}\\AppData\\Local\\Microsoft\\Edge\\User Data`;
 }
 
-async function main() {
-  const input = process.argv[2];
-  if (!input) {
-    console.log("Usage: node approve.js requests.csv");
-    process.exit(1);
+async function startBrowser() {
+  const profile = userDataDir();
+  try {
+    if (fs.existsSync(profile)) {
+      return await chromium.launchPersistentContext(profile, {
+        headless: false,
+        channel: "msedge",
+        viewport: { width: 1400, height: 900 }
+      });
+    }
+  } catch (e) {
+    console.warn("Persistent context failed:", e.message);
+  }
+  const browser = await chromium.launch({ headless: false, channel: "msedge" });
+  return await browser.newContext({ viewport: { width: 1400, height: 900 } });
+}
+
+async function gotoHome(page) {
+  await page.goto(cfg.urls.homeNoelle, { waitUntil: "domcontentloaded" });
+  await page.waitForLoadState("networkidle").catch(() => {});
+}
+
+async function safeScreenshot(page, suffix = "") {
+  try {
+    const file = path.join(
+      ERR_DIR,
+      `${ts().replace(/[: ]/g, "")}${suffix}.png`
+    );
+    await page.screenshot({ path: file, fullPage: true });
+    console.log("Saved screenshot:", file);
+    return file;
+  } catch (e) {
+    console.warn("screenshot failed:", e.message);
+    return null;
+  }
+}
+
+async function clickIf(page, selector) {
+  try {
+    const loc = page.locator(selector);
+    if (await loc.count()) {
+      await loc.first().click({ force: true });
+      return true;
+    }
+  } catch (e) {}
+  return false;
+}
+
+/* ───────────────── switch user (re-use your working logic) ───────────────── */
+
+async function switchUser(page, who) {
+  console.log(`→ switchUser: "${who}"`);
+
+  await clickIf(page, cfg.sel.switchLink);
+  await sleep(300);
+
+  await page
+    .waitForSelector('text=Switch View', { timeout: 6000 })
+    .catch(() => {});
+
+  const openerCandidates = [
+    'div[role="dialog"] >> text="Select..."',
+    'div[role="dialog"] >> text=Select',
+    'div[role="dialog"] >> .select__control',
+    'div[role="dialog"] >> button[aria-haspopup="listbox"]',
+    'div[role="dialog"] >> [role="combobox"]'
+  ];
+
+  let opened = false;
+  for (const s of openerCandidates) {
+    try {
+      const loc = page.locator(s);
+      if (await loc.count()) {
+        await loc.first().click({ force: true });
+        opened = true;
+        await sleep(220);
+        break;
+      }
+    } catch (e) {}
   }
 
-  const ids = readIdsFromFile(input);
+  if (!opened) {
+    try {
+      const dialog = page.locator('div[role="dialog"]').first();
+      if (await dialog.count()) {
+        const box = await dialog.boundingBox();
+        if (box) {
+          await page.mouse.click(box.x + box.width - 60, box.y + 60, {
+            force: true
+          });
+          opened = true;
+          await sleep(250);
+        }
+      }
+    } catch (e) {}
+  }
 
-  ensureDir("logs");
-  const logFile = path.join("logs", `run-${ts().replace(/[: ]/g, "")}.csv`);
-  fs.writeFileSync(logFile, "timestamp,id,status\n");
+  await sleep(220);
+
+  const optionSelectors = [
+    `div[role="option"]:has-text("${who}")`,
+    `div[role="dialog"] >> text="${who}"`,
+    `text="${who}"`,
+    `li:has-text("${who}")`,
+    `div:has-text("${who}")`
+  ];
+
+  for (const sel of optionSelectors) {
+    try {
+      const loc = page.locator(sel);
+      if (await loc.count()) {
+        await loc.first().click({ force: true });
+        console.log("   clicked option via selector:", sel);
+        await sleep(150);
+        await clickIf(page, cfg.sel.switchConfirm);
+        await page.waitForLoadState("networkidle").catch(() => {});
+        await sleep(600);
+        return;
+      }
+    } catch (e) {}
+  }
+
+  const shot = await safeScreenshot(page, "-switch-failed");
+  await saveText(
+    "switch-error.txt",
+    `Could not select "${who}" in Switch dialog. Screenshot: ${shot}\n`
+  );
+  throw new Error(`switchUser: unable to select "${who}". Screenshot: ${shot}`);
+}
+
+/* ───────────────── search helpers ───────────────── */
+
+async function findSearchInput(page, timeout = 15000) {
+  const placeholders = [
+    'input[placeholder*="Search by request ID"]',
+    'input[placeholder*="Search by request"]',
+    'input[placeholder*="Search"]'
+  ];
+
+  const start = Date.now();
+  while (Date.now() - start < timeout) {
+    for (const sel of placeholders) {
+      try {
+        const loc = page.locator(sel);
+        if (await loc.count()) {
+          const count = await loc.count();
+          for (let i = 0; i < count; i++) {
+            const l = loc.nth(i);
+            if (await l.isVisible().catch(() => false)) return l;
+          }
+        }
+      } catch (e) {}
+    }
+
+    // fallback: react-select container like in your screenshots
+    try {
+      const container = page
+        .locator('div[id^="Search-"], div.react-select, div.search-container')
+        .first();
+      if (await container.count()) {
+        const innerInput = container.locator("input").first();
+        if (
+          (await innerInput.count()) &&
+          (await innerInput.isVisible().catch(() => false))
+        ) {
+          return innerInput;
+        }
+      }
+    } catch (e) {}
+
+    await sleep(300);
+  }
+
+  throw new Error("Search input not found on page");
+}
+
+async function fillSearch(page, inputLoc, id) {
+  await inputLoc.scrollIntoViewIfNeeded().catch(() => {});
+  await inputLoc.click({ clickCount: 3, force: true }).catch(() => {});
+  await inputLoc.fill("");
+  await sleep(120);
+  await inputLoc.fill(id);
+  await sleep(250);
+  try {
+    await inputLoc.press("Enter");
+  } catch {}
+  await clickIf(page, cfg.sel.searchBtn);
+}
+
+/** Wait up to 40s for a link with the request ID to appear */
+async function waitForResult(page, id, maxMs = 40000) {
+  const sel = `a:has-text("${id}")`;
+  const start = Date.now();
+  while (Date.now() - start < maxMs) {
+    const loc = page.locator(sel).first();
+    if ((await loc.count()) && (await loc.isVisible().catch(() => false))) {
+      return true;
+    }
+    await sleep(700);
+  }
+  return false;
+}
+
+/* ───────────────── click blue ✔ Approve button ───────────────── */
+
+async function clickApproveButton(page) {
+  const candidates = [
+    'span[title="Approve"] + button',
+    'span[title="Approve"] ~ button',
+    'span.mr-2 + button'
+  ];
+
+  for (const sel of candidates) {
+    try {
+      const loc = page.locator(sel).first();
+      if ((await loc.count()) && (await loc.isVisible().catch(() => false))) {
+        await loc.scrollIntoViewIfNeeded().catch(() => {});
+        await loc.click({ force: true });
+        return true;
+      }
+    } catch (e) {}
+  }
+
+  // last-resort JS fallback
+  try {
+    const handle = await page.$('span[title="Approve"]');
+    if (handle) {
+      await page.evaluate((span) => {
+        const container = span.closest("div");
+        if (!container) return;
+        const btn =
+          container.querySelector("button") ||
+          container.parentElement?.querySelector("button");
+        if (btn) btn.click();
+      }, handle);
+      await sleep(500);
+      return true;
+    }
+  } catch (e) {}
+
+  await safeScreenshot(page, "-approve-btn-not-found");
+  return false;
+}
+
+/* ───────────────── approve one ID ───────────────── */
+
+async function approveOneInUser(page, id) {
+  console.log(`  → Searching for ${id} ...`);
+
+  const inputLoc = await findSearchInput(page, 8000);
+  await fillSearch(page, inputLoc, id);
+
+  const found = await waitForResult(page, id, 40000);
+  if (!found) {
+    console.log(`  ✗ Not found for this user: ${id}`);
+    return false;
+  }
+
+  console.log(`  ✓ Found ${id}, clicking blue Approve button...`);
+
+  const clicked = await clickApproveButton(page);
+  if (!clicked) {
+    console.log(`  ✗ Could not click Approve for ${id}`);
+    return false;
+  }
+
+  // wait ~18s after clicking approve
+  await sleep(18000);
+  console.log(`  ✓ Approved ${id} (waited ~18s)\n`);
+  return true;
+}
+
+/* ───────────────── run through all IDs for this single approver ───────────────── */
+
+async function approveAllForApprover(page, ids, approverLabel, logPath) {
+  console.log(`\n===== Approving as ${approverLabel} =====`);
+  const remaining = [];
+
+  for (const id of ids) {
+    try {
+      const ok = await approveOneInUser(page, id);
+      if (ok) {
+        appendLog(
+          logPath,
+          `${ts()},${id},approved_in_primary,approved in ${approverLabel}\n`
+        );
+      } else {
+        remaining.push(id);
+      }
+    } catch (e) {
+      console.warn(`  !! Error for ${id}:`, e.message);
+      remaining.push(id);
+    }
+  }
+
+  console.log(
+    `Finished for ${approverLabel}. Approved: ${
+      ids.length - remaining.length
+    }, Remaining (not found / failed): ${remaining.length}`
+  );
+  return remaining;
+}
+
+/* ───────────────── MAIN ───────────────── */
+
+async function main() {
+  const csv = process.argv[2] || "requests.csv";
+  if (!fs.existsSync(csv)) {
+    console.error("requests.csv missing");
+    return;
+  }
+  const ids = readRequests(csv);
+  if (!ids.length) {
+    console.error("No IDs found in CSV");
+    return;
+  }
+
+  const logPath = path.join(LOGS_DIR, `run-${ts().replace(/[: ]/g, "")}.csv`);
+  appendLog(logPath, "time,request_id,result,notes\n");
 
   const context = await startBrowser();
   const page = await context.newPage();
 
-  // open portal
-  await page.goto(cfg.urls.home, { waitUntil: "domcontentloaded" });
-  await sleep(1500);
+  try {
+    await gotoHome(page);
 
-  // switch to approver
-  await switchUser(page, cfg.users.primary);
+    const approverName = cfg.users.noelle; // use this as "primary approver"
+    const body = await page.textContent("body").catch(() => "");
+    if (!body.includes(approverName)) {
+      await switchUser(page, approverName);
+    }
 
-  for (const id of ids) {
-    const status = await approveOne(page, id);
-    fs.appendFileSync(logFile, `${ts()},${id},${status}\n`);
+    const remaining = await approveAllForApprover(
+      page,
+      ids,
+      approverName,
+      logPath
+    );
+
+    for (const id of remaining) {
+      appendLog(
+        logPath,
+        `${ts()},${id},not_found_here,not found for ${approverName}\n`
+      );
+    }
+
+    console.log("\n✔ DONE. See log:", logPath);
+    await context.close();
+  } catch (err) {
+    console.error("Fatal error:", err.message);
+    const shot = await safeScreenshot(page, "-fatal");
+    await saveText(
+      "fatal-error.txt",
+      `${err.stack}\nScreenshot: ${shot}\n`
+    );
+    console.log("Browser left open for inspection (check logs/errors).");
   }
-
-  console.log("\nDONE ✔");
-  console.log("Log saved:", logFile);
 }
 
-main();
+main().catch((e) => console.error("unhandled:", e));
