@@ -1,36 +1,41 @@
-// config.js
+// config.js  – per-row single-approver version
+
 export const cfg = {
   urls: {
-    home: "https://leap.standardchartered.com/tsp/workforce-management/team/request/2/list/redirect",
-  },
-
-  users: {
-    // 🔵 CHANGE THIS FOR EACH TEAM
-    // Must match EXACTLY what appears in the grey banner:
-    // "Eder, Noelle" or "Garrido, Alvaro" or "Gupta, Kartik"
-    primary: "Eder, Noelle",
+    // 👉 Put the URL that opens the portal as *you* here
+    // (same one you used before for Noelle)
+    home: "https://<your-portal-url-here>"
   },
 
   sel: {
+    // SWITCH USER
+    activeUserText: "You are viewing Workforce Management as",
     switchLink: "text=Switch",
     switchDialogTitle: "Switch View",
+    switchOption: (who) => `text="${who}"`,
     switchConfirm: 'button:has-text("Switch")',
 
+    // SEARCH
     searchInput: 'input[placeholder*="Search by request ID"]',
+    searchBtn: 'button:has(svg)',
 
-    // inline blue approve button inside the row
-    inlineApproveBtn: 'span[title="Approve"] button',
+    // (kept for compatibility, though not used in this version)
+    rowById: (id) => `tr:has(a:has-text("${id}")), li:has-text("${id}")`,
+    rowCheckbox: (id) =>
+      `tr:has(a:has-text("${id}")) input[type="checkbox"], li:has-text("${id}") input[type="checkbox"`,
 
-    // row matcher by WF-xxxxx
-    rowById: (id) => `a:has-text("${id}")`,
+    // (bulk approve not used here, but harmless to keep)
+    bulkApproveBtn: 'button:has-text("Approve")',
+    approveConfirmBtn: 'button:has-text("Confirm")',
+    successToast: 'div[role="status"], div.toast-success, text=successfully'
   },
 
-  timing: {
-    searchTimeoutMs: 40000,   // max wait for result
-    searchPollMs: 1000,       // check every 1s
-    afterApproveWaitMs: 15000 // wait after clicking approve
+  users: {
+    // 👉 THIS is the *only* name this script will approve as
+    // Change this string per team: e.g. "Doe, John"
+    approver: "Eder, Noelle"
   },
 
-  // Windows username for using Edge profile
-  edgeProfileUser: "2031146",
+  // 👉 Your Windows username for Edge profile path
+  edgeProfileUser: "2031146"
 };
